@@ -98,6 +98,33 @@ class Zabbix:
         return int(service[0]['status'])
 
     @pyzabbix_safe({})
+    def has_childs(self, serviceid):
+        """
+        Return if service has childs
+        @param serviceid: string
+        @return: dict of data
+        """
+        # Fet per ZBX6 
+        service = self.zapi.service.get(
+            serviceids=serviceid,
+            selectChildren='extend'
+            )
+        return bool(len(service[0]['children']))
+
+    @pyzabbix_safe({})
+    def get_service_name(self, serviceid):
+        """
+        Get name of a service
+        @param serviceid: string
+        @return: dict of data
+        """
+        # Fet per ZBX6 
+        service = self.zapi.service.get(
+            serviceids=serviceid
+            )
+        return str(service[0]['name'])
+
+    @pyzabbix_safe({})
     def get_event(self, triggerid):
         """
         Get event information based on triggerid
@@ -502,9 +529,6 @@ def triggers_watcher(service_map):
     @return: boolean
     """
     for i in service_map:
-        # inc_status = 1
-        # comp_status = 1
-        # inc_name = ''
         inc_msg = ''
 
         if 'serviceid' in i: # canviat triggerid per serviceid 
@@ -513,145 +537,84 @@ def triggers_watcher(service_map):
             #logging.info("getting status of serviceid " + i['serviceid'] + ', the status is ' + str(service_state))
             
             # Per defecte, fem que el servei estigui funcionant
-            component_state = 1
+            new_component_state = 1
+            old_component_state = int(cachet.get_component(i['component_id'])['data']['status'])
 
             # Casos en que hi ha incidències:
             if service_state == -1:
                 # Operational. 
-                component_state = 1
+                new_component_state = 1
             elif service_state == 0:
                 # No info. 
-                component_state = 2
+                new_component_state = 2
             elif service_state == 1:
                 # Information issue
-                component_state = 2
+                new_component_state = 2
             elif service_state == 2:
                 # Warning issue
-                component_state = 2
+                new_component_state = 2
             elif service_state == 3:
                 # Average issue
-                component_state = 2
+                new_component_state = 2
             elif service_state == 4:
                 # High issue
-                component_state = 3
+                new_component_state = 3
             else:
                 # Disaster issue
-                component_state = 4
+                new_component_state = 4
 
             #logging.info("setting status " + str(component_state) + " for service " + i['serviceid'])
-            cachet.upd_components(i['component_id'], status=component_state)  
-            continue
+            cachet.upd_components(i['component_id'], status=new_component_state)  
+            
+            # passa a la següent iteració si el servei té fills.
+            # no registrem incidents de components groups
+            if zapi.has_childs(i['serviceid']):
+                continue
+            # check if they were some changes on the state
+            if new_component_state != old_component_state:
+                logging.info("creating incident. new status: " + str(new_component_state) + " old status " + str(old_component_state))
+                # new incident
+                if (new_component_state > 1 and old_component_state == 1):
+                    inc_name = zapi.get_service_name(i['serviceid'])
+                    inc_msg = "El servei " + inc_name + " no està disponible"
+                    inc_status = "1" # status: investigating
 
-            # ## Bloc cancel·lat, ja no té sentit
-            # #if 'value' not in trigger:
-            # #    logging.error('Cannot get value for trigger {}'.format(i['triggerid']))
-            # #    continue
-            # # Check if incident already registered
-            # # Trigger non Active
+                    cachet.new_incidents(name=inc_name, message=inc_msg, status=inc_status,
+                                         component_id=i['component_id'], component_status=new_component_state)
 
-            # # TODO: check possible status values
-            # if status < 0:
-            #     component_status = cachet.get_component(i['component_id'])['data']['status']
-            #     # And component in operational mode
-            #     if str(component_status) == '1':
-            #         continue
-            #     else:
-            #         # And component not operational mode
+                # update incident status.
+                # TODO (not supported yet)
+                #elif (new_component_state > 1 and old_component_state > 1):
+                #    last_inc = cachet.get_incident(i['component_id'])
+                    
 
-            #         # TODO: donar suport a guardar incidents
-            #         cachet.upd_components(i['component_id'], status=1)
-            #         continue
-            #         last_inc = cachet.get_incident(i['component_id'])
-            #         if str(last_inc['id']) != '0':
-            #             if resolving_tmpl:
-            #                 inc_msg = resolving_tmpl.format(time=datetime.datetime.now(tz=tz).strftime('%b %d, %H:%M'),
-            #                                                 ) + cachet.get_incident(i['component_id'])['message']
-            #             else:
-            #                 inc_msg = cachet.get_incident(i['component_id'])['message']
-            #             cachet.upd_incident(last_inc['id'],
-            #                                 status=4,
-            #                                 component_id=i['component_id'],
-            #                                 component_status=1,
-            #                                 message=inc_msg)
-            #         # Incident does not exist. Just change component status
-            #         else:
-            #             cachet.upd_components(i['component_id'], status=1)
-            #         continue
-            # # Trigger in Active state
-            # # Codi revisat fins aquí
-            # elif status >= 0:
-            #     zbx_event = zapi.get_event(i['triggerid'])
-            #     inc_name = trigger['description']
-            #     if not zbx_event:
-            #         logging.warning('Failed to get zabbix event for trigger {}'.format(i['triggerid']))
-            #         # Mock zbx_event for further usage
-            #         zbx_event = {'acknowledged': '0',
-            #                      }
-            #     if zbx_event.get('acknowledged', '0') == '1':
-            #         inc_status = 2
-            #         for msg in zbx_event['acknowledges']:
-            #             # TODO: Add timezone?
-            #             #       Move format to config file
-            #             author = msg.get('name', '') + ' ' + msg.get('surname', '')
-            #             ack_time = datetime.datetime.fromtimestamp(int(msg['clock']), tz=tz).strftime('%b %d, %H:%M')
-            #             ack_msg = acknowledgement_tmpl.format(
-            #                 message=msg['message'],
-            #                 ack_time=ack_time,
-            #                 author=author
-            #             )
-            #             if ack_msg not in inc_msg:
-            #                 inc_msg = ack_msg + inc_msg
-            #     else:
-            #         inc_status = 1
-            #     if int(trigger['priority']) >= 4:
-            #         comp_status = 4
-            #     elif int(trigger['priority']) == 3:
-            #         comp_status = 3
-            #     else:
-            #         comp_status = 2
+                # resolve incident. en principi, ok
+                elif (new_component_state == 1 and old_component_state > 1):
+                    last_inc = cachet.get_incident(i['component_id'])
+                    if last_inc['id']!='0':
+                        if resolving_tmpl:
+                            inc_msg = resolving_tmpl.format(time=datetime.datetime.now(tz=tz).strftime('%b %d, %H:%M'),
+                                            ) + cachet.get_incident(i['component_id'])['message']
+                        else:
+                            inc_msg = cachet.get_incident(i['component_id'])['message']
+                        cachet.upd_incident(last_inc['id'],
+                                        status=4,
+                                        component_id=i['component_id'],
+                                        component_status=1,
+                                        message=inc_msg)
 
-            #     if not inc_msg and investigating_tmpl:
-            #         if zbx_event:
-            #             zbx_event_clock = int(zbx_event.get('clock'))
-            #             zbx_event_time = datetime.datetime.fromtimestamp(zbx_event_clock, tz=tz).strftime('%b %d, %H:%M')
-            #         else:
-            #             zbx_event_time = ''
-            #         inc_msg = investigating_tmpl.format(
-            #             group=i.get('group_name', ''),
-            #             component=i.get('component_name', ''),
-            #             time=zbx_event_time,
-            #             trigger_description=trigger.get('comments', ''),
-            #             trigger_name=trigger.get('description', ''),
-            #         )
+            # check if alarmed but there are incidents registered
+            elif (new_component_state > 1):
+                last_inc = cachet.get_incident(i['component_id'])
+                # if id==0, then the incident does not exist
+                # if status==4, then the last incident was fixed, but now there's an incident
+                if last_inc['id']=='0' or last_inc['status']=='4':
+                    inc_name = zapi.get_service_name(i['serviceid'])
+                    inc_msg = "El servei " + inc_name + " no està disponible."
+                    inc_status = "1" # status: investigating
 
-            #     if not inc_msg and trigger.get('comments'):
-            #         inc_msg = trigger.get('comments')
-            #     elif not inc_msg:
-            #         inc_msg = trigger.get('description')
-
-            #     if 'group_name' in i:
-            #         inc_name = i.get('group_name') + ' | ' + inc_name
-
-            #     last_inc = cachet.get_incident(i['component_id'])
-            #     # Incident not registered
-            #     if last_inc['status'] in ('-1', '4'):
-            #         # TODO: added incident_date
-            #         # incident_date = datetime.datetime.fromtimestamp(
-            #         # int(trigger['lastchange'])).strftime('%d/%m/%Y %H:%M')
-            #         cachet.new_incidents(name=inc_name, message=inc_msg, status=inc_status,
-            #                              component_id=i['component_id'], component_status=comp_status)
-
-            #     # Incident already registered
-            #     elif last_inc['status'] not in ('-1', '4'):
-            #         # Only incident message can change. So check if this have happened
-            #         if last_inc['message'].strip() != inc_msg.strip():
-            #             cachet.upd_incident(last_inc['id'], message=inc_msg, status=inc_status,
-            #                                 component_status=comp_status)
-
-        else:
-            # TODO: ServiceID
-            # inc_msg = 'TODO: ServiceID'
-            continue
+                    cachet.new_incidents(name=inc_name, message=inc_msg, status=inc_status,
+                                         component_id=i['component_id'], component_status=new_component_state)
 
     return True
 
