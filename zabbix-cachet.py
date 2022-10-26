@@ -77,11 +77,25 @@ class Zabbix:
         @param triggerid: string
         @return: dict of data
         """
+        # Revisat per ZBX6 
         trigger = self.zapi.trigger.get(
             expandComment='true',
             expandDescription='true',
             triggerids=triggerid)
         return trigger[0]
+
+    @pyzabbix_safe({})
+    def get_status(self, serviceid):
+        """
+        Get status of a service
+        @param serviceid: string
+        @return: dict of data
+        """
+        # Fet per ZBX6 
+        service = self.zapi.service.get(
+            serviceids=serviceid
+            )
+        return int(service[0]['status'])
 
     @pyzabbix_safe({})
     def get_event(self, triggerid):
@@ -90,9 +104,10 @@ class Zabbix:
         @param triggerid: string
         @return: dict of data
         """
+        # Revisat per ZBX6 
         zbx_event = self.zapi.event.get(
             select_acknowledges='extend',
-            expandDescription='true',
+            #expandDescription='true', <- retirat al ZBX6
             object=0,
             value=1,
             objectids=triggerid)
@@ -118,7 +133,8 @@ class Zabbix:
         """
         if root:
             root_service = self.zapi.service.get(
-                selectDependencies='extend',
+                #selectDependencies='extend', <- retirat al ZBX6
+                selectChildren='extend', # retorna els fills
                 filter={'name': root})
             try:
                 root_service = root_service[0]
@@ -126,14 +142,16 @@ class Zabbix:
                 logging.error('Can not find "{}" service in Zabbix'.format(root))
                 sys.exit(1)
             service_ids = []
-            for dependency in root_service['dependencies']:
-                service_ids.append(dependency['serviceid'])
+            for child in root_service['children']: #canvio dependency per child
+                child.append(dependency['serviceid'])
             services = self.zapi.service.get(
-                selectDependencies='extend',
+                 #selectDependencies='extend', <- retirat al ZBX6
+                selectChildren='extend', # retorna els fills
                 serviceids=service_ids)
         else:
             services = self.zapi.service.get(
-                selectDependencies='extend',
+                #selectDependencies='extend', <- retirat al ZBX6
+                selectChildren='extend', # retorna els fills
                 output='extend')
         if not services:
             logging.error('Can not find any child service for "{}"'.format(root))
@@ -141,15 +159,16 @@ class Zabbix:
         # Create a tree of services
         known_ids = []
         # At first proceed services with dependencies as groups
-        service_tree = [i for i in services if i['dependencies']]
+        service_tree = [i for i in services if i['children']] # canvio dependencies per children
         for idx, service in enumerate(service_tree):
             child_services_ids = []
-            for dependency in service['dependencies']:
-                child_services_ids.append(dependency['serviceid'])
+            for child in service['children']: # canvio dependency per child
+                child_services_ids.append(child['serviceid'])
             child_services = self.zapi.service.get(
-                    selectDependencies='extend',
+                    #selectDependencies='extend', <- retirat al ZBX6
+                    selectChildren='extend', # retorna els fills
                     serviceids=child_services_ids)
-            service_tree[idx]['dependencies'] = child_services
+            service_tree[idx]['children'] = child_services
             # Save ids to filter them later
             known_ids = known_ids + child_services_ids
             known_ids.append(service['serviceid'])
@@ -488,106 +507,124 @@ def triggers_watcher(service_map):
         # inc_name = ''
         inc_msg = ''
 
-        if 'triggerid' in i:
-            trigger = zapi.get_trigger(i['triggerid'])
-            # Check if Zabbix return trigger
-            if 'value' not in trigger:
-                logging.error('Cannot get value for trigger {}'.format(i['triggerid']))
-                continue
-            # Check if incident already registered
-            # Trigger non Active
-            if str(trigger['value']) == '0':
-                component_status = cachet.get_component(i['component_id'])['data']['status']
-                # And component in operational mode
-                if str(component_status) == '1':
-                    continue
-                else:
-                    # And component not operational mode
-                    last_inc = cachet.get_incident(i['component_id'])
-                    if str(last_inc['id']) != '0':
-                        if resolving_tmpl:
-                            inc_msg = resolving_tmpl.format(time=datetime.datetime.now(tz=tz).strftime('%b %d, %H:%M'),
-                                                            ) + cachet.get_incident(i['component_id'])['message']
-                        else:
-                            inc_msg = cachet.get_incident(i['component_id'])['message']
-                        cachet.upd_incident(last_inc['id'],
-                                            status=4,
-                                            component_id=i['component_id'],
-                                            component_status=1,
-                                            message=inc_msg)
-                    # Incident does not exist. Just change component status
-                    else:
-                        cachet.upd_components(i['component_id'], status=1)
-                    continue
-            # Trigger in Active state
-            elif trigger['value'] == '1':
-                zbx_event = zapi.get_event(i['triggerid'])
-                inc_name = trigger['description']
-                if not zbx_event:
-                    logging.warning('Failed to get zabbix event for trigger {}'.format(i['triggerid']))
-                    # Mock zbx_event for further usage
-                    zbx_event = {'acknowledged': '0',
-                                 }
-                if zbx_event.get('acknowledged', '0') == '1':
-                    inc_status = 2
-                    for msg in zbx_event['acknowledges']:
-                        # TODO: Add timezone?
-                        #       Move format to config file
-                        author = msg.get('name', '') + ' ' + msg.get('surname', '')
-                        ack_time = datetime.datetime.fromtimestamp(int(msg['clock']), tz=tz).strftime('%b %d, %H:%M')
-                        ack_msg = acknowledgement_tmpl.format(
-                            message=msg['message'],
-                            ack_time=ack_time,
-                            author=author
-                        )
-                        if ack_msg not in inc_msg:
-                            inc_msg = ack_msg + inc_msg
-                else:
-                    inc_status = 1
-                if int(trigger['priority']) >= 4:
-                    comp_status = 4
-                elif int(trigger['priority']) == 3:
-                    comp_status = 3
-                else:
-                    comp_status = 2
+        if 'serviceid' in i: # canviat triggerid per serviceid 
+            # trigger = zapi.get_trigger(i['triggerid'])
+            logging.info("getting status of serviceid " + i['serviceid'])
+            service_state = zapi.get_status(i['serviceid'])
+            
+            component_state = 1
+            if (service_state < 0):
+                component_state = 4
 
-                if not inc_msg and investigating_tmpl:
-                    if zbx_event:
-                        zbx_event_clock = int(zbx_event.get('clock'))
-                        zbx_event_time = datetime.datetime.fromtimestamp(zbx_event_clock, tz=tz).strftime('%b %d, %H:%M')
-                    else:
-                        zbx_event_time = ''
-                    inc_msg = investigating_tmpl.format(
-                        group=i.get('group_name', ''),
-                        component=i.get('component_name', ''),
-                        time=zbx_event_time,
-                        trigger_description=trigger.get('comments', ''),
-                        trigger_name=trigger.get('description', ''),
-                    )
+            logging.info("setting status " + str(component_state) + " for service " + i['serviceid'])
+            cachet.upd_components(i['component_id'], status=component_state)  
+            continue
 
-                if not inc_msg and trigger.get('comments'):
-                    inc_msg = trigger.get('comments')
-                elif not inc_msg:
-                    inc_msg = trigger.get('description')
+            # ## Bloc cancel·lat, ja no té sentit
+            # #if 'value' not in trigger:
+            # #    logging.error('Cannot get value for trigger {}'.format(i['triggerid']))
+            # #    continue
+            # # Check if incident already registered
+            # # Trigger non Active
 
-                if 'group_name' in i:
-                    inc_name = i.get('group_name') + ' | ' + inc_name
+            # # TODO: check possible status values
+            # if status < 0:
+            #     component_status = cachet.get_component(i['component_id'])['data']['status']
+            #     # And component in operational mode
+            #     if str(component_status) == '1':
+            #         continue
+            #     else:
+            #         # And component not operational mode
 
-                last_inc = cachet.get_incident(i['component_id'])
-                # Incident not registered
-                if last_inc['status'] in ('-1', '4'):
-                    # TODO: added incident_date
-                    # incident_date = datetime.datetime.fromtimestamp(
-                    # int(trigger['lastchange'])).strftime('%d/%m/%Y %H:%M')
-                    cachet.new_incidents(name=inc_name, message=inc_msg, status=inc_status,
-                                         component_id=i['component_id'], component_status=comp_status)
+            #         # TODO: donar suport a guardar incidents
+            #         cachet.upd_components(i['component_id'], status=1)
+            #         continue
+            #         last_inc = cachet.get_incident(i['component_id'])
+            #         if str(last_inc['id']) != '0':
+            #             if resolving_tmpl:
+            #                 inc_msg = resolving_tmpl.format(time=datetime.datetime.now(tz=tz).strftime('%b %d, %H:%M'),
+            #                                                 ) + cachet.get_incident(i['component_id'])['message']
+            #             else:
+            #                 inc_msg = cachet.get_incident(i['component_id'])['message']
+            #             cachet.upd_incident(last_inc['id'],
+            #                                 status=4,
+            #                                 component_id=i['component_id'],
+            #                                 component_status=1,
+            #                                 message=inc_msg)
+            #         # Incident does not exist. Just change component status
+            #         else:
+            #             cachet.upd_components(i['component_id'], status=1)
+            #         continue
+            # # Trigger in Active state
+            # # Codi revisat fins aquí
+            # elif status >= 0:
+            #     zbx_event = zapi.get_event(i['triggerid'])
+            #     inc_name = trigger['description']
+            #     if not zbx_event:
+            #         logging.warning('Failed to get zabbix event for trigger {}'.format(i['triggerid']))
+            #         # Mock zbx_event for further usage
+            #         zbx_event = {'acknowledged': '0',
+            #                      }
+            #     if zbx_event.get('acknowledged', '0') == '1':
+            #         inc_status = 2
+            #         for msg in zbx_event['acknowledges']:
+            #             # TODO: Add timezone?
+            #             #       Move format to config file
+            #             author = msg.get('name', '') + ' ' + msg.get('surname', '')
+            #             ack_time = datetime.datetime.fromtimestamp(int(msg['clock']), tz=tz).strftime('%b %d, %H:%M')
+            #             ack_msg = acknowledgement_tmpl.format(
+            #                 message=msg['message'],
+            #                 ack_time=ack_time,
+            #                 author=author
+            #             )
+            #             if ack_msg not in inc_msg:
+            #                 inc_msg = ack_msg + inc_msg
+            #     else:
+            #         inc_status = 1
+            #     if int(trigger['priority']) >= 4:
+            #         comp_status = 4
+            #     elif int(trigger['priority']) == 3:
+            #         comp_status = 3
+            #     else:
+            #         comp_status = 2
 
-                # Incident already registered
-                elif last_inc['status'] not in ('-1', '4'):
-                    # Only incident message can change. So check if this have happened
-                    if last_inc['message'].strip() != inc_msg.strip():
-                        cachet.upd_incident(last_inc['id'], message=inc_msg, status=inc_status,
-                                            component_status=comp_status)
+            #     if not inc_msg and investigating_tmpl:
+            #         if zbx_event:
+            #             zbx_event_clock = int(zbx_event.get('clock'))
+            #             zbx_event_time = datetime.datetime.fromtimestamp(zbx_event_clock, tz=tz).strftime('%b %d, %H:%M')
+            #         else:
+            #             zbx_event_time = ''
+            #         inc_msg = investigating_tmpl.format(
+            #             group=i.get('group_name', ''),
+            #             component=i.get('component_name', ''),
+            #             time=zbx_event_time,
+            #             trigger_description=trigger.get('comments', ''),
+            #             trigger_name=trigger.get('description', ''),
+            #         )
+
+            #     if not inc_msg and trigger.get('comments'):
+            #         inc_msg = trigger.get('comments')
+            #     elif not inc_msg:
+            #         inc_msg = trigger.get('description')
+
+            #     if 'group_name' in i:
+            #         inc_name = i.get('group_name') + ' | ' + inc_name
+
+            #     last_inc = cachet.get_incident(i['component_id'])
+            #     # Incident not registered
+            #     if last_inc['status'] in ('-1', '4'):
+            #         # TODO: added incident_date
+            #         # incident_date = datetime.datetime.fromtimestamp(
+            #         # int(trigger['lastchange'])).strftime('%d/%m/%Y %H:%M')
+            #         cachet.new_incidents(name=inc_name, message=inc_msg, status=inc_status,
+            #                              component_id=i['component_id'], component_status=comp_status)
+
+            #     # Incident already registered
+            #     elif last_inc['status'] not in ('-1', '4'):
+            #         # Only incident message can change. So check if this have happened
+            #         if last_inc['message'].strip() != inc_msg.strip():
+            #             cachet.upd_incident(last_inc['id'], message=inc_msg, status=inc_status,
+            #                                 component_status=comp_status)
 
         else:
             # TODO: ServiceID
@@ -631,24 +668,27 @@ def init_cachet(services):
     # Zabbix Triggers to Cachet components id map
     data = []
     for zbx_service in services:
-        # Check if zbx_service has childes
+        # Check if zbx_service has childs
         zxb2cachet_i = {}
-        if zbx_service['dependencies']:
+        if zbx_service['children']: #canvi dependencies per children
             group = cachet.new_components_gr(zbx_service['name'])
-            for dependency in zbx_service['dependencies']:
-                # Component without trigger
-                if int(dependency['triggerid']) != 0:
-                    trigger = zapi.get_trigger(dependency['triggerid'])
-                    if not trigger:
-                        logging.error('Failed to get trigger {} from Zabbix'.format(dependency['triggerid']))
+            for child in zbx_service['children']: #canvi dependency per child 
+                # Component sense fills
+                if not (child['children']):
+                    #trigger = zapi.get_trigger(child['triggerid']) <- ara ja no cal agafar el triggerID
+                    if not type(child['status']) is str:
+                        logging.error('Failed to get status {} from Zabbix'.format(child['status']))
                         continue
-                    component = cachet.new_components(dependency['name'], group_id=group['id'],
-                                                      link=trigger['url'], description=trigger['description'])
+                    # TODO: caldria canviar la URL i la descripció
+                    component = cachet.new_components(child['name'], group_id=group['id'],
+                                    link='http://www.prova.cat/', description='Descripció')
                     # Create a map of Zabbix Trigger <> Cachet IDs
-                    zxb2cachet_i = {'triggerid': dependency['triggerid']}
+                    zxb2cachet_i = {'serviceid': child['serviceid']}
+                
+                # Component amb fills
                 else:
-                    component = cachet.new_components(dependency['name'], group_id=group['id'])
-                    zxb2cachet_i = {'serviceid': dependency['serviceid']}
+                    component = cachet.new_components(child['name'], group_id=group['id'])
+                    zxb2cachet_i = {'serviceid': child['serviceid'], 'hasChilds':'true'}
                 zxb2cachet_i.update({'group_id': group['id'],
                                      'group_name': group['name'],
                                      'component_id': component['id'],
@@ -656,20 +696,16 @@ def init_cachet(services):
                                      })
                 data.append(zxb2cachet_i)
         else:
-            # Component with trigger
-            if zbx_service['triggerid']:
-                if int(zbx_service['triggerid']) == 0:
-                    logging.error('Zabbix Service with service id = {} does '
-                                  'not have trigger or child service'.format(zbx_service['serviceid']))
+            # Component withut childs
+            if zbx_service['serviceid']:
+                if not type(child['status']) is str:
+                    logging.error('Failed to get status {} from Zabbix'.format(child['status']))
                     continue
-                trigger = zapi.get_trigger(zbx_service['triggerid'])
-                if not trigger:
-                    logging.error('Failed to get trigger {} from Zabbix'.format(zbx_service['triggerid']))
-                    continue
-                component = cachet.new_components(zbx_service['name'], link=trigger['url'],
-                                                  description=trigger['description'])
+                #trigger = zapi.get_trigger(zbx_service['triggerid'])
+                component = cachet.new_components(child['name'], group_id=group['id'],
+                                link='http://www.prova.cat/', description='Descripció')
                 # Create a map of Zabbix Trigger <> Cachet IDs
-                zxb2cachet_i = {'triggerid': zbx_service['triggerid'],
+                zxb2cachet_i = {'serviceid': zbx_service['serviceid'],
                                 'component_id': component['id'],
                                 'component_name': component['name']}
             data.append(zxb2cachet_i)
