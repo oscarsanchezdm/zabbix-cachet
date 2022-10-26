@@ -485,19 +485,19 @@ class Cachet:
 def triggers_watcher(service_map):
     """
     Check zabbix triggers and update Cachet components
-    Zabbix Priority:
-        0 - (default) not classified;
+    Zabbix Status:
+        -1 - OK;
+        0 - Not Classified;
         1 - information;
-        2 - warning;
+        2 - Warning
         3 - average;
         4 - high;
         5 - disaster.
-    Cachet Incident Statuses:
-        0 - Scheduled - This status is used for a scheduled status.
-        1 - Investigating - You have reports of a problem and you're currently looking into them.
-        2 - Identified - You've found the issue and you're working on a fix.
-        3 - Watching - You've since deployed a fix and you're currently watching the situation.
-        4 - Fixed
+    Cachet Statuses:
+        1 - Operational
+        2 - Performance issues
+        3 - Partial Outage
+        4 - Major Outage
     @param service_map: list of tuples
     @return: boolean
     """
@@ -509,14 +509,36 @@ def triggers_watcher(service_map):
 
         if 'serviceid' in i: # canviat triggerid per serviceid 
             # trigger = zapi.get_trigger(i['triggerid'])
-            logging.info("getting status of serviceid " + i['serviceid'])
             service_state = zapi.get_status(i['serviceid'])
+            #logging.info("getting status of serviceid " + i['serviceid'] + ', the status is ' + str(service_state))
             
+            # Per defecte, fem que el servei estigui funcionant
             component_state = 1
-            if (service_state < 0):
+
+            # Casos en que hi ha incidències:
+            if service_state == -1:
+                # Operational. 
+                component_state = 1
+            elif service_state == 0:
+                # No info. 
+                component_state = 2
+            elif service_state == 1:
+                # Information issue
+                component_state = 2
+            elif service_state == 2:
+                # Warning issue
+                component_state = 2
+            elif service_state == 3:
+                # Average issue
+                component_state = 2
+            elif service_state == 4:
+                # High issue
+                component_state = 3
+            else:
+                # Disaster issue
                 component_state = 4
 
-            logging.info("setting status " + str(component_state) + " for service " + i['serviceid'])
+            #logging.info("setting status " + str(component_state) + " for service " + i['serviceid'])
             cachet.upd_components(i['component_id'], status=component_state)  
             continue
 
