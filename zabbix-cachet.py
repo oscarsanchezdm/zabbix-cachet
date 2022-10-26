@@ -666,7 +666,7 @@ def init_cachet(services):
                         continue
                     # TODO: caldria canviar la URL i la descripció
                     component = cachet.new_components(child['name'], group_id=group['id'],
-                                    link='http://www.prova.cat/', description='Descripció')
+                                    link='', description='')
                     # Create a map of Zabbix Trigger <> Cachet IDs
                     zxb2cachet_i = {'serviceid': child['serviceid']}
                 
