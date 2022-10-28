@@ -56,6 +56,12 @@ templates:
 
     ```{trigger_name}```
 
+  # Template for incident description
+  # Supported field:
+  #   sname: Service name
+  servicedown: |
+    Service {sname} is down
+
   # Template for resolved incinents (resolving)
   # Supported fields:
   #   time: Incindent resolved time in Cachet
