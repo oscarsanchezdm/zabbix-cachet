@@ -34,8 +34,8 @@ items of services that is exported to Cachet and Cachet`s API key.
 # Requirements
 Here are version that was successfully tested:
 * Cachet 2.2, 2.3, 2.4, 2.5
-* Zabbix 2.2, 2.4, 3.0, 3.2, 4.0, 4.2, 5.2
-* python 2.7+
+* Zabbix 6.0, 6.2, 6.4
+* python 2.7+, 3.10+
 
 # Installation
 
