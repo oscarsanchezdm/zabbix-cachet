@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This script populated Cachet of Zabbix IT Services
+This script populated Cachet of Zabbix6 IT Services
 """
 import sys
 import os
@@ -17,7 +17,7 @@ from operator import itemgetter
 
 __author__ = 'Artem Alexandrov <qk4l()tem4uk.ru>'
 __license__ = """The MIT License (MIT)"""
-__version__ = '1.3.7'
+__version__ = '1.3.8'
 
 
 def client_http_error(url, code, message):
@@ -71,27 +71,12 @@ class Zabbix:
         return version
 
     @pyzabbix_safe({})
-    def get_trigger(self, triggerid):
-        """
-        Get trigger information
-        @param triggerid: string
-        @return: dict of data
-        """
-        # Revisat per ZBX6 
-        trigger = self.zapi.trigger.get(
-            expandComment='true',
-            expandDescription='true',
-            triggerids=triggerid)
-        return trigger[0]
-
-    @pyzabbix_safe({})
     def get_status(self, serviceid):
         """
         Get status of a service
         @param serviceid: string
         @return: dict of data
         """
-        # Fet per ZBX6 
         service = self.zapi.service.get(
             serviceids=serviceid
             )
@@ -118,29 +103,10 @@ class Zabbix:
         @param serviceid: string
         @return: dict of data
         """
-        # Fet per ZBX6 
         service = self.zapi.service.get(
             serviceids=serviceid
             )
         return str(service[0]['name'])
-
-    @pyzabbix_safe({})
-    def get_event(self, triggerid):
-        """
-        Get event information based on triggerid
-        @param triggerid: string
-        @return: dict of data
-        """
-        # Revisat per ZBX6 
-        zbx_event = self.zapi.event.get(
-            select_acknowledges='extend',
-            #expandDescription='true', <- retirat al ZBX6
-            object=0,
-            value=1,
-            objectids=triggerid)
-        if len(zbx_event) >= 1:
-            return zbx_event[-1]
-        return zbx_event
 
     @pyzabbix_safe([])
     def get_itservices(self, root=None):
@@ -160,8 +126,7 @@ class Zabbix:
         """
         if root:
             root_service = self.zapi.service.get(
-                #selectDependencies='extend', <- retirat al ZBX6
-                selectChildren='extend', # retorna els fills
+                selectChildren='extend',
                 filter={'name': root})
             try:
                 root_service = root_service[0]
@@ -169,16 +134,14 @@ class Zabbix:
                 logging.error('Can not find "{}" service in Zabbix'.format(root))
                 sys.exit(1)
             service_ids = []
-            for child in root_service['children']: #canvio dependency per child
-                child.append(dependency['serviceid'])
+            for child in root_service['children']: 
+                service_ids.append(child['serviceid'])
             services = self.zapi.service.get(
-                 #selectDependencies='extend', <- retirat al ZBX6
-                selectChildren='extend', # retorna els fills
+                selectChildren='extend',
                 serviceids=service_ids)
         else:
             services = self.zapi.service.get(
-                #selectDependencies='extend', <- retirat al ZBX6
-                selectChildren='extend', # retorna els fills
+                selectChildren='extend',
                 output='extend')
         if not services:
             logging.error('Can not find any child service for "{}"'.format(root))
@@ -186,14 +149,13 @@ class Zabbix:
         # Create a tree of services
         known_ids = []
         # At first proceed services with dependencies as groups
-        service_tree = [i for i in services if i['children']] # canvio dependencies per children
+        service_tree = [i for i in services if i['children']]
         for idx, service in enumerate(service_tree):
             child_services_ids = []
-            for child in service['children']: # canvio dependency per child
+            for child in service['children']: 
                 child_services_ids.append(child['serviceid'])
             child_services = self.zapi.service.get(
-                    #selectDependencies='extend', <- retirat al ZBX6
-                    selectChildren='extend', # retorna els fills
+                    selectChildren='extend', 
                     serviceids=child_services_ids)
             service_tree[idx]['children'] = child_services
             # Save ids to filter them later
@@ -509,9 +471,9 @@ class Cachet:
         return data
 
 
-def triggers_watcher(service_map):
+def services_watcher(service_map):
     """
-    Check zabbix triggers and update Cachet components
+    Check zabbix services and update Cachet components
     Zabbix Status:
         -1 - OK;
         0 - Not Classified;
@@ -531,16 +493,14 @@ def triggers_watcher(service_map):
     for i in service_map:
         inc_msg = ''
 
-        if 'serviceid' in i: # canviat triggerid per serviceid 
-            # trigger = zapi.get_trigger(i['triggerid'])
+        if 'serviceid' in i:
             service_state = zapi.get_status(i['serviceid'])
-            #logging.info("getting status of serviceid " + i['serviceid'] + ', the status is ' + str(service_state))
             
-            # Per defecte, fem que el servei estigui funcionant
+            # by default, the service is on operational mode
             new_component_state = 1
             old_component_state = int(cachet.get_component(i['component_id'])['data']['status'])
 
-            # Casos en que hi ha incidències:
+            # incident cases:
             if service_state == -1:
                 # Operational. 
                 new_component_state = 1
@@ -563,32 +523,25 @@ def triggers_watcher(service_map):
                 # Disaster issue
                 new_component_state = 4
 
-            #logging.info("setting status " + str(component_state) + " for service " + i['serviceid'])
             cachet.upd_components(i['component_id'], status=new_component_state)  
             
-            # passa a la següent iteració si el servei té fills.
-            # no registrem incidents de components groups
+            # do not register incidents for components groups (services which have childrens)
             if zapi.has_childs(i['serviceid']):
                 continue
             # check if they were some changes on the state
             if new_component_state != old_component_state:
-                logging.info("creating incident. new status: " + str(new_component_state) + " old status " + str(old_component_state))
-                # new incident
                 if (new_component_state > 1 and old_component_state == 1):
                     inc_name = zapi.get_service_name(i['serviceid'])
-                    inc_msg = "El servei " + inc_name + " no està disponible"
+                    inc_msg = ""
+                    if servicedown_tmpl:
+                        inc_msg = servicedown_tmpl.format(sname=inc_name)
+                    else:
+                        inc_msg = "Service " + inc_name + " is currently unavailable."
                     inc_status = "1" # status: investigating
 
                     cachet.new_incidents(name=inc_name, message=inc_msg, status=inc_status,
                                          component_id=i['component_id'], component_status=new_component_state)
 
-                # update incident status.
-                # TODO (not supported yet)
-                #elif (new_component_state > 1 and old_component_state > 1):
-                #    last_inc = cachet.get_incident(i['component_id'])
-                    
-
-                # resolve incident. en principi, ok
                 elif (new_component_state == 1 and old_component_state > 1):
                     last_inc = cachet.get_incident(i['component_id'])
                     if last_inc['id']!='0':
@@ -610,7 +563,11 @@ def triggers_watcher(service_map):
                 # if status==4, then the last incident was fixed, but now there's an incident
                 if last_inc['id']=='0' or last_inc['status']=='4':
                     inc_name = zapi.get_service_name(i['serviceid'])
-                    inc_msg = "El servei " + inc_name + " no està disponible."
+                    inc_msg = ""
+                    if servicedown_tmpl:
+                        inc_msg = servicedown_tmpl.format(sname=inc_name)
+                    else:
+                        inc_msg = "Service " + inc_name + " is currently unavailable."
                     inc_status = "1" # status: investigating
 
                     cachet.new_incidents(name=inc_name, message=inc_msg, status=inc_status,
@@ -619,28 +576,27 @@ def triggers_watcher(service_map):
     return True
 
 
-def triggers_watcher_worker(service_map, interval, event):
+def services_watcher_worker(service_map, interval, event):
     """
-    Worker for triggers_watcher. Run it continuously with specific interval
+    Worker for services_watcher. Run it continuously with specific interval
     @param service_map: list of tuples
     @param interval: interval in seconds
     @param event: treading.Event object
     @return:
     """
-    logging.info('start trigger watcher')
+    logging.info('start services watcher')
     while not event.is_set():
-        logging.debug('check Zabbix triggers')
         # Do not run if Zabbix is not available
         if zapi.get_version():
             try:
-                triggers_watcher(service_map)
+                services_watcher(service_map)
             except Exception as e:
-                logging.error('triggers_watcher() raised an Exception. Something gone wrong')
+                logging.error('services_watcher() raised an Exception. Something gone wrong')
                 logging.error(e, exc_info=True)
         else:
             logging.error('Zabbix is not available. Skip checking...')
         time.sleep(interval)
-    logging.info('end trigger watcher')
+    logging.info('end services watcher')
 
 
 def init_cachet(services):
@@ -650,27 +606,21 @@ def init_cachet(services):
     @param services: list
     @return: list of tuples
     """
-    # Zabbix Triggers to Cachet components id map
+    # Zabbix Services to Cachet components id map
     data = []
     for zbx_service in services:
-        # Check if zbx_service has childs
         zxb2cachet_i = {}
-        if zbx_service['children']: #canvi dependencies per children
+        if zbx_service['children']: 
             group = cachet.new_components_gr(zbx_service['name'])
-            for child in zbx_service['children']: #canvi dependency per child 
-                # Component sense fills
+            for child in zbx_service['children']: 
                 if not (child['children']):
-                    #trigger = zapi.get_trigger(child['triggerid']) <- ara ja no cal agafar el triggerID
                     if not type(child['status']) is str:
                         logging.error('Failed to get status {} from Zabbix'.format(child['status']))
                         continue
-                    # TODO: caldria canviar la URL i la descripció
                     component = cachet.new_components(child['name'], group_id=group['id'],
                                     link='', description='')
-                    # Create a map of Zabbix Trigger <> Cachet IDs
                     zxb2cachet_i = {'serviceid': child['serviceid']}
                 
-                # Component amb fills
                 else:
                     component = cachet.new_components(child['name'], group_id=group['id'])
                     zxb2cachet_i = {'serviceid': child['serviceid'], 'hasChilds':'true'}
@@ -681,15 +631,13 @@ def init_cachet(services):
                                      })
                 data.append(zxb2cachet_i)
         else:
-            # Component withut childs
             if zbx_service['serviceid']:
                 if not type(child['status']) is str:
                     logging.error('Failed to get status {} from Zabbix'.format(child['status']))
                     continue
-                #trigger = zapi.get_trigger(zbx_service['triggerid'])
                 component = cachet.new_components(child['name'], group_id=group['id'],
-                                link='http://www.prova.cat/', description='Descripció')
-                # Create a map of Zabbix Trigger <> Cachet IDs
+                                link='', description='')
+                # Create a map of Zabbix Services <> Cachet IDs
                 zxb2cachet_i = {'serviceid': zbx_service['serviceid'],
                                 'component_id': component['id'],
                                 'component_name': component['name']}
@@ -735,6 +683,7 @@ if __name__ == '__main__':
         acknowledgement_tmpl = templates.get('acknowledgement', acknowledgement_tmpl_d)
         investigating_tmpl = templates.get('investigating', '')
         resolving_tmpl = templates.get('resolving', '')
+        servicedown_tmpl = templates.get('servicedown','')
     else:
         acknowledgement_tmpl = acknowledgement_tmpl_d
 
@@ -772,18 +721,18 @@ if __name__ == '__main__':
                     zbxtr2cachet_new = zbxtr2cachet
             else:
                 logging.info('Successfully synced Cachet components with Zabbix Services')
-            # Restart triggers_watcher_worker
+            # Restart services_watcher_worker
             if zbxtr2cachet != zbxtr2cachet_new:
                 zbxtr2cachet = zbxtr2cachet_new
-                logging.info('Restart triggers_watcher worker')
-                logging.debug('List of watching triggers {}'.format(str(zbxtr2cachet)))
+                logging.info('Restart services_watcher worker')
+                logging.debug('List of watching services {}'.format(str(zbxtr2cachet)))
                 event.set()
                 # Wait until tread die
                 while inc_update_t.is_alive():
                     time.sleep(1)
                 event.clear()
-                inc_update_t = threading.Thread(name='Trigger Watcher',
-                                                target=triggers_watcher_worker,
+                inc_update_t = threading.Thread(name='Services Watcher',
+                                                target=services_watcher_worker,
                                                 args=(zbxtr2cachet, SETTINGS['update_inc_interval'], event))
                 inc_update_t.daemon = True
                 inc_update_t.start()
