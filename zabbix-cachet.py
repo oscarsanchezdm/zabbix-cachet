@@ -560,7 +560,7 @@ def services_watcher(service_map):
             elif (new_component_state > 1):
                 last_inc = cachet.get_incident(i['component_id'])
                 # if id==0, then the incident does not exist
-                # if status==4, then the last incident was fixed, but now there's an incident
+                # if status==4, then the last incident was fixed, but now there's an incident
                 if last_inc['id']=='0' or last_inc['status']=='4':
                     inc_name = zapi.get_service_name(i['serviceid'])
                     inc_msg = ""
