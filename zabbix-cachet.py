@@ -127,6 +127,7 @@ class Zabbix:
         if root:
             root_service = self.zapi.service.get(
                 selectChildren='extend',
+                selectTags='extend',
                 filter={'name': root})
             try:
                 root_service = root_service[0]
@@ -138,10 +139,12 @@ class Zabbix:
                 service_ids.append(child['serviceid'])
             services = self.zapi.service.get(
                 selectChildren='extend',
+                selectTags='extend',
                 serviceids=service_ids)
         else:
             services = self.zapi.service.get(
                 selectChildren='extend',
+                selectTags='extend',
                 output='extend')
         if not services:
             logging.error('Can not find any child service for "{}"'.format(root))
@@ -155,7 +158,8 @@ class Zabbix:
             for child in service['children']: 
                 child_services_ids.append(child['serviceid'])
             child_services = self.zapi.service.get(
-                    selectChildren='extend', 
+                    selectChildren='extend',
+                    selectTags='extend', 
                     serviceids=child_services_ids)
             service_tree[idx]['children'] = child_services
             # Save ids to filter them later
@@ -329,7 +333,7 @@ class Cachet:
         @return: dict of data
         """
         # Get values for new component
-        params = {'name': name, 'link': '', 'description': '', 'status': '1', 'group_id': 0}
+        params = {'name': name, 'link': '', 'description': '', 'status': '1', 'group_id': 0, 'tags':''}
         params.update(kwargs)
         # Do not post empty params to Cachet
         for i in ('link', 'description'):
@@ -365,6 +369,16 @@ class Cachet:
         """
         url = 'components/' + str(id)
         params = self.get_component(id)['data']
+        if isinstance(params['tags'], dict):
+            # Agafem les claus del diccionari en una llista amb la funció keys()
+            my_list = list(params['tags'].keys())
+
+            # Ordenem la llista alfabèticament amb la funció sort()
+            my_list.sort()
+
+            # Creem un string amb la llista ordenada utilitzant la funció join()
+            params['tags'] = ",".join(my_list)
+
         params.update(kwargs)
         data = self._http_put(url, params)
         if data:
@@ -617,8 +631,18 @@ def init_cachet(services):
                     if not type(child['status']) is str:
                         logging.error('Failed to get status {} from Zabbix'.format(child['status']))
                         continue
+
+                    tags = []
+                    for tag in child['tags']:
+                        if isinstance(tag, dict):
+                            if (tag['tag'] == FILTERTAG):
+                                tags.append(tag['value'])
+
+                    tags.sort()
+                    tags_str = ",".join(tags)
+
                     component = cachet.new_components(child['name'], group_id=group['id'],
-                                    link='', description='')
+                                    link='', description='', tags=tags_str)
                     zxb2cachet_i = {'serviceid': child['serviceid']}
                 
                 else:
@@ -635,8 +659,17 @@ def init_cachet(services):
                 if not type(child['status']) is str:
                     logging.error('Failed to get status {} from Zabbix'.format(child['status']))
                     continue
+                tags = []
+                for tag in child['tags']:
+                    if isinstance(tag, dict):
+                        if (tag['tag'] == FILTERTAG):
+                            tags.append(tag['value'])
+
+                tags.sort()
+                tags_str = ",".join(tags)
+
                 component = cachet.new_components(child['name'], group_id=group['id'],
-                                link='', description='')
+                                link='', description='', tags=tags_str)
                 # Create a map of Zabbix Services <> Cachet IDs
                 zxb2cachet_i = {'serviceid': zbx_service['serviceid'],
                                 'component_id': component['id'],
@@ -670,6 +703,7 @@ if __name__ == '__main__':
     ZABBIX = config['zabbix']
     CACHET = config['cachet']
     SETTINGS = config['settings']
+    FILTERTAG = config['filtertag']
 
     if SETTINGS.get('time_zone'):
         tz = pytz.timezone(SETTINGS['time_zone'])
