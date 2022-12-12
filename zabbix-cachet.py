@@ -703,13 +703,13 @@ if __name__ == '__main__':
     ZABBIX = config['zabbix']
     CACHET = config['cachet']
     SETTINGS = config['settings']
-    FILTERTAG = config['filtertag']
 
     if SETTINGS.get('time_zone'):
         tz = pytz.timezone(SETTINGS['time_zone'])
     else:
         tz = None
 
+    FILTERTAG = SETTINGS['filtertag']
     # Templates for incident displaying
     acknowledgement_tmpl_d = "{message}\n\n###### {ack_time} by {author}\n\n______\n"
     templates = config.get('templates')
